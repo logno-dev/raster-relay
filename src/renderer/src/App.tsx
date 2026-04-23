@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { ChevronLeft, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
@@ -7,6 +8,17 @@ import type { DirectoryEntry, DirectoryListing, ImageMetadata } from '../../shar
 const PRELOAD_RADIUS = 4
 const SAVED_ROOTS_KEY = 'gallery.savedRoots'
 const ACTIVE_ROOT_KEY = 'gallery.activeRoot'
+
+type TransitionType = 'none' | 'fade'
+
+type SlideshowSettings = {
+  imageDurationMs: number
+  transitionType: TransitionType
+  transitionDurationMs: number
+  shuffle: boolean
+  loop: boolean
+  enterFullscreen: boolean
+}
 
 type NodeState = {
   loading: boolean
@@ -39,6 +51,23 @@ function parseSavedRoots(rawValue: string | null): string[] {
   }
 }
 
+function buildSlideshowOrder(total: number, startIndex: number, shuffle: boolean): number[] {
+  const base = Array.from({ length: total }, (_, index) => index)
+  if (!shuffle) {
+    return base
+  }
+
+  for (let index = base.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    const temp = base[index]
+    base[index] = base[swapIndex]
+    base[swapIndex] = temp
+  }
+
+  const startPosition = Math.max(0, base.indexOf(startIndex))
+  return [...base.slice(startPosition), ...base.slice(0, startPosition)]
+}
+
 function App() {
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [savedRoots, setSavedRoots] = useState<string[]>([])
@@ -58,6 +87,26 @@ function App() {
   const [isActionTrayOpen, setIsActionTrayOpen] = useState(false)
   const [isCopyingMarked, setIsCopyingMarked] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [isSlideshowSettingsOpen, setIsSlideshowSettingsOpen] = useState(false)
+  const [isSlideshowActive, setIsSlideshowActive] = useState(false)
+  const [slideshowOrder, setSlideshowOrder] = useState<number[]>([])
+  const [slideshowCursor, setSlideshowCursor] = useState(0)
+  const [slideshowRequestedFullscreen, setSlideshowRequestedFullscreen] = useState(false)
+  const [slideshowWasFullscreen, setSlideshowWasFullscreen] = useState(false)
+  const [showSlideshowStopButton, setShowSlideshowStopButton] = useState(true)
+  const [slideshowTransition, setSlideshowTransition] = useState<{
+    fromPath: string
+    toPath: string
+    phase: 'idle' | 'running'
+  } | null>(null)
+  const [slideshowSettings, setSlideshowSettings] = useState<SlideshowSettings>({
+    imageDurationMs: 3500,
+    transitionType: 'fade',
+    transitionDurationMs: 1000,
+    shuffle: false,
+    loop: true,
+    enterFullscreen: true
+  })
   const [zoomLevel, setZoomLevel] = useState(1)
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
   const [isPanningImage, setIsPanningImage] = useState(false)
@@ -66,6 +115,8 @@ function App() {
   const thumbStripRef = useRef<HTMLElement | null>(null)
   const imageWrapRef = useRef<HTMLDivElement | null>(null)
   const lastPointerRef = useRef<{ x: number; y: number; id: number } | null>(null)
+  const slideshowTransitionTimerRef = useRef<number | null>(null)
+  const slideshowTransitionFrameRef = useRef<number | null>(null)
 
   const images = activeListing?.images ?? []
   const hasImages = images.length > 0
@@ -74,6 +125,14 @@ function App() {
   const markedCount = markedImagePaths.length
   const activeImageMarked = activeImage ? markedPathSet.has(activeImage.path) : false
   const isZoomed = zoomLevel > 1.001
+  const isPresentationMode = isFullscreen || isSlideshowActive
+  const transitionMs = slideshowSettings.transitionType === 'none' ? 0 : slideshowSettings.transitionDurationMs
+  const activeImageStyle: CSSProperties = {
+    transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel})`
+  }
+  const transitionImageStyle: CSSProperties & Record<'--rr-transition-ms', string> = {
+    '--rr-transition-ms': `${transitionMs}ms`
+  }
   const fullscreenMetadataEntries = useMemo(() => {
     if (!activeMetadata) {
       return []
@@ -95,6 +154,43 @@ function App() {
     const prioritized = activeMetadata.entries.filter((entry) => priority.has(entry.label))
     return prioritized.slice(0, 10)
   }, [activeMetadata])
+
+  function scheduleSlideshowTransition(fromPath: string, toPath: string): void {
+    if (slideshowSettings.transitionType === 'none' || transitionMs <= 0 || fromPath === toPath) {
+      setSlideshowTransition(null)
+      return
+    }
+
+    if (slideshowTransitionTimerRef.current) {
+      window.clearTimeout(slideshowTransitionTimerRef.current)
+      slideshowTransitionTimerRef.current = null
+    }
+    if (slideshowTransitionFrameRef.current) {
+      window.cancelAnimationFrame(slideshowTransitionFrameRef.current)
+      slideshowTransitionFrameRef.current = null
+    }
+
+    setSlideshowTransition({ fromPath, toPath, phase: 'idle' })
+
+    slideshowTransitionFrameRef.current = window.requestAnimationFrame(() => {
+      setSlideshowTransition((previous) => {
+        if (!previous || previous.toPath !== toPath) {
+          return previous
+        }
+        return { ...previous, phase: 'running' }
+      })
+    })
+
+    slideshowTransitionTimerRef.current = window.setTimeout(() => {
+      setSlideshowTransition((previous) => {
+        if (!previous || previous.toPath !== toPath) {
+          return previous
+        }
+        return null
+      })
+      slideshowTransitionTimerRef.current = null
+    }, transitionMs)
+  }
 
   const currentPathLabel = useMemo(() => {
     if (!activeListing) {
@@ -135,7 +231,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!isFullscreen) {
+    if (!isPresentationMode) {
       setHideCursor(false)
       return
     }
@@ -165,7 +261,7 @@ function App() {
       window.removeEventListener('mousedown', bumpCursor)
       window.removeEventListener('touchstart', bumpCursor)
     }
-  }, [isFullscreen])
+  }, [isPresentationMode])
 
   useEffect(() => {
     const activePaths = new Set(images.map((image) => image.path))
@@ -178,6 +274,19 @@ function App() {
     setIsPanningImage(false)
     lastPointerRef.current = null
   }, [activeImage?.path])
+
+  useEffect(() => {
+    return () => {
+      if (slideshowTransitionTimerRef.current) {
+        window.clearTimeout(slideshowTransitionTimerRef.current)
+        slideshowTransitionTimerRef.current = null
+      }
+      if (slideshowTransitionFrameRef.current) {
+        window.cancelAnimationFrame(slideshowTransitionFrameRef.current)
+        slideshowTransitionFrameRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -292,7 +401,136 @@ function App() {
   }, [activeImage?.path, isExifPanelOpen])
 
   useEffect(() => {
+    if (!isSlideshowActive || slideshowOrder.length === 0) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setSlideshowCursor((previousCursor) => {
+        const nextCursor = previousCursor + 1
+
+        if (nextCursor >= slideshowOrder.length) {
+          if (!slideshowSettings.loop) {
+            setIsSlideshowActive(false)
+            return previousCursor
+          }
+          return 0
+        }
+
+        return nextCursor
+      })
+    }, Math.max(500, slideshowSettings.imageDurationMs))
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [isSlideshowActive, slideshowOrder, slideshowCursor, slideshowSettings.imageDurationMs, slideshowSettings.loop])
+
+  useEffect(() => {
+    if (!isSlideshowActive || slideshowOrder.length === 0) {
+      return
+    }
+
+    const targetIndex = slideshowOrder[Math.min(slideshowCursor, slideshowOrder.length - 1)]
+    if (typeof targetIndex !== 'number' || targetIndex === activeIndex) {
+      return
+    }
+
+    const fromPath = images[activeIndex]?.path
+    const toPath = images[targetIndex]?.path
+    if (fromPath && toPath) {
+      scheduleSlideshowTransition(fromPath, toPath)
+    }
+
+    setActiveIndex(targetIndex)
+    setImageReady(true)
+  }, [isSlideshowActive, slideshowCursor, slideshowOrder, activeIndex, images])
+
+  useEffect(() => {
+    if (!isSlideshowActive) {
+      return
+    }
+
+    if (images.length === 0) {
+      setIsSlideshowActive(false)
+      return
+    }
+
+    const order = buildSlideshowOrder(images.length, activeIndex, slideshowSettings.shuffle)
+    setSlideshowOrder(order)
+    setSlideshowCursor(0)
+  }, [images.length, isSlideshowActive, slideshowSettings.shuffle])
+
+  useEffect(() => {
+    if (isSlideshowActive || !slideshowRequestedFullscreen) {
+      return
+    }
+
+    if (!document.fullscreenElement) {
+      setSlideshowRequestedFullscreen(false)
+      return
+    }
+
+    void document.exitFullscreen().finally(() => {
+      setSlideshowRequestedFullscreen(false)
+    })
+  }, [isSlideshowActive, slideshowRequestedFullscreen])
+
+  useEffect(() => {
+    if (!isSlideshowActive) {
+      setShowSlideshowStopButton(false)
+      return
+    }
+
+    setShowSlideshowStopButton(true)
+
+    let timeoutId: number | null = window.setTimeout(() => {
+      setShowSlideshowStopButton(false)
+    }, 1700)
+
+    const bumpOverlayControls = () => {
+      setShowSlideshowStopButton(true)
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+      timeoutId = window.setTimeout(() => {
+        setShowSlideshowStopButton(false)
+      }, 1700)
+    }
+
+    window.addEventListener('pointermove', bumpOverlayControls)
+
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+      window.removeEventListener('pointermove', bumpOverlayControls)
+    }
+  }, [isSlideshowActive])
+
+  useEffect(() => {
+    if (!isSlideshowActive || !slideshowRequestedFullscreen) {
+      return
+    }
+
     if (isFullscreen) {
+      if (!slideshowWasFullscreen) {
+        setSlideshowWasFullscreen(true)
+      }
+      return
+    }
+
+    if (!slideshowWasFullscreen) {
+      return
+    }
+
+    setIsSlideshowActive(false)
+    setSlideshowRequestedFullscreen(false)
+    setSlideshowWasFullscreen(false)
+  }, [isSlideshowActive, slideshowRequestedFullscreen, slideshowWasFullscreen, isFullscreen])
+
+  useEffect(() => {
+    if (isPresentationMode) {
       return
     }
 
@@ -313,7 +551,7 @@ function App() {
     return () => {
       window.cancelAnimationFrame(frame)
     }
-  }, [activeIndex, images.length, isFullscreen])
+  }, [activeIndex, images.length, isPresentationMode])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
@@ -371,6 +609,24 @@ function App() {
       if (key === '0') {
         event.preventDefault()
         resetZoomPan()
+        return
+      }
+
+      if (key === 's') {
+        event.preventDefault()
+        void toggleSlideshow()
+        return
+      }
+
+      if (key === ' ' && isSlideshowActive) {
+        event.preventDefault()
+        void toggleSlideshow()
+        return
+      }
+
+      if (key === 'escape' && isSlideshowActive) {
+        event.preventDefault()
+        void stopSlideshow()
       }
     }
 
@@ -378,7 +634,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [images.length, activeImage?.path])
+  }, [images.length, activeImage?.path, isSlideshowActive, slideshowSettings])
 
   async function loadDirectory(targetPath: string): Promise<void> {
     const listing = await window.galleryApi.listDirectory(targetPath)
@@ -572,6 +828,66 @@ function App() {
     setImageReady(false)
   }
 
+  async function startSlideshow(): Promise<void> {
+    if (images.length === 0) {
+      return
+    }
+
+    const order = buildSlideshowOrder(images.length, activeIndex, slideshowSettings.shuffle)
+    setSlideshowOrder(order)
+    setSlideshowCursor(0)
+    setIsSlideshowActive(true)
+    setImageReady(true)
+    setSlideshowWasFullscreen(false)
+    setIsSlideshowSettingsOpen(false)
+
+    if (slideshowSettings.enterFullscreen && !document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen()
+        setSlideshowRequestedFullscreen(true)
+      } catch {
+        setSlideshowRequestedFullscreen(false)
+      }
+    }
+  }
+
+  async function stopSlideshow(): Promise<void> {
+    setIsSlideshowActive(false)
+    setSlideshowWasFullscreen(false)
+    setSlideshowTransition(null)
+    if (slideshowTransitionTimerRef.current) {
+      window.clearTimeout(slideshowTransitionTimerRef.current)
+      slideshowTransitionTimerRef.current = null
+    }
+    if (slideshowTransitionFrameRef.current) {
+      window.cancelAnimationFrame(slideshowTransitionFrameRef.current)
+      slideshowTransitionFrameRef.current = null
+    }
+    if (slideshowRequestedFullscreen && document.fullscreenElement) {
+      try {
+        await document.exitFullscreen()
+      } catch {
+        // ignore fullscreen exit errors
+      }
+    }
+    setSlideshowRequestedFullscreen(false)
+  }
+
+  async function toggleSlideshow(): Promise<void> {
+    if (isSlideshowActive) {
+      await stopSlideshow()
+      return
+    }
+
+    await startSlideshow()
+  }
+
+  function markImageReady(): void {
+    window.requestAnimationFrame(() => {
+      setImageReady(true)
+    })
+  }
+
   function resetZoomPan(): void {
     setZoomLevel(1)
     setPanOffset({ x: 0, y: 0 })
@@ -721,8 +1037,8 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${leftPanelCollapsed ? 'panel-hidden' : ''} ${isExifPanelOpen ? 'exif-open' : ''} ${isFullscreen ? 'fullscreen' : ''}`}>
-      {!isFullscreen && !leftPanelCollapsed && (
+    <div className={`app-shell ${leftPanelCollapsed ? 'panel-hidden' : ''} ${isExifPanelOpen ? 'exif-open' : ''} ${isPresentationMode ? 'fullscreen' : ''}`}>
+      {!isPresentationMode && !leftPanelCollapsed && (
         <aside className="left-panel">
           <div className="panel-header">
             <button className="primary-button" onClick={() => void chooseRootDirectory()}>
@@ -766,7 +1082,7 @@ function App() {
         </aside>
       )}
 
-      {!isFullscreen && (
+      {!isPresentationMode && (
         <div className={`side-tab-rail ${leftPanelCollapsed ? 'collapsed' : 'open'}`}>
           <button
             className={`side-tab-button ${leftPanelCollapsed ? 'collapsed' : 'open'}`}
@@ -778,8 +1094,8 @@ function App() {
         </div>
       )}
 
-      <main className={`main-stage ${isFullscreen ? 'fullscreen' : ''}`}>
-        {!isFullscreen && (
+      <main className={`main-stage ${isPresentationMode ? 'fullscreen' : ''}`}>
+        {!isPresentationMode && (
           <header className="toolbar">
             <div className="path-chip" title={currentPathLabel}>
               {currentPathLabel}
@@ -791,19 +1107,103 @@ function App() {
               <button className="ghost-button" onClick={() => void toggleFullscreen()}>
                 {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
               </button>
-              <button className="ghost-button" disabled title="Slideshow controls will be added after MVP image flow is complete.">
-                Slideshow (Later)
+              <button className="ghost-button" onClick={() => setIsSlideshowSettingsOpen((prev) => !prev)}>
+                Slideshow
               </button>
             </div>
           </header>
         )}
 
-        <section className={`viewer-stage ${isFullscreen ? 'fullscreen' : ''} ${isFullscreen && hideCursor ? 'cursor-hidden' : ''}`}>
+        {!isPresentationMode && isSlideshowSettingsOpen && (
+          <div className="slideshow-popover">
+            <div className="slideshow-title">Slideshow Settings</div>
+            <label className="slideshow-field">
+              <span>Image Duration (seconds)</span>
+              <input
+                type="number"
+                min={0.5}
+                max={60}
+                step={0.1}
+                value={(slideshowSettings.imageDurationMs / 1000).toFixed(1)}
+                onChange={(event) => {
+                  const seconds = Math.max(0.5, Math.min(60, Number(event.target.value) || 0.5))
+                  setSlideshowSettings((prev) => ({ ...prev, imageDurationMs: Math.round(seconds * 1000) }))
+                }}
+              />
+            </label>
+            <label className="slideshow-field">
+              <span>Transition Type</span>
+              <select
+                value={slideshowSettings.transitionType}
+                onChange={(event) => {
+                  setSlideshowSettings((prev) => ({ ...prev, transitionType: event.target.value as TransitionType }))
+                }}
+              >
+                <option value="fade">Fade</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <label className="slideshow-field">
+              <span>Transition Duration (seconds)</span>
+              <input
+                type="number"
+                min={0}
+                max={3}
+                step={0.05}
+                value={(slideshowSettings.transitionDurationMs / 1000).toFixed(2)}
+                onChange={(event) => {
+                  const seconds = Math.max(0, Math.min(3, Number(event.target.value) || 0))
+                  setSlideshowSettings((prev) => ({ ...prev, transitionDurationMs: Math.round(seconds * 1000) }))
+                }}
+              />
+            </label>
+            <label className="slideshow-check">
+              <input
+                type="checkbox"
+                checked={slideshowSettings.shuffle}
+                onChange={(event) => {
+                  setSlideshowSettings((prev) => ({ ...prev, shuffle: event.target.checked }))
+                }}
+              />
+              <span>Shuffle</span>
+            </label>
+            <label className="slideshow-check">
+              <input
+                type="checkbox"
+                checked={slideshowSettings.loop}
+                onChange={(event) => {
+                  setSlideshowSettings((prev) => ({ ...prev, loop: event.target.checked }))
+                }}
+              />
+              <span>Loop</span>
+            </label>
+            <label className="slideshow-check">
+              <input
+                type="checkbox"
+                checked={slideshowSettings.enterFullscreen}
+                onChange={(event) => {
+                  setSlideshowSettings((prev) => ({ ...prev, enterFullscreen: event.target.checked }))
+                }}
+              />
+              <span>Enter native fullscreen</span>
+            </label>
+            <div className="slideshow-actions">
+              <button className="ghost-button" onClick={() => setIsSlideshowSettingsOpen(false)}>
+                Close
+              </button>
+              <button className="primary-button" onClick={() => void startSlideshow()}>
+                Start (S)
+              </button>
+            </div>
+          </div>
+        )}
+
+        <section className={`viewer-stage ${isPresentationMode ? 'fullscreen' : ''} ${isPresentationMode && hideCursor ? 'cursor-hidden' : ''}`}>
           {!hasImages && <div className="empty-state">No images in this folder yet. Pick another directory.</div>}
 
           {hasImages && activeImage && (
             <>
-              {isFullscreen ? (
+              {isPresentationMode ? (
                 <button className="fullscreen-nav-zone left" onClick={() => moveImage(-1)} disabled={activeIndex === 0}>
                   <span className="fullscreen-nav-icon">
                     <ChevronLeft size={66} strokeWidth={1.8} />
@@ -825,26 +1225,46 @@ function App() {
                 onPointerCancel={handleImagePointerEnd}
                 onDoubleClick={handleImageDoubleClick}
               >
-                {!imageReady && <div className="spinner">Loading image...</div>}
-                <img
-                  className={`active-image ${imageReady ? 'visible' : ''}`}
-                  src={toFileUrl(activeImage.path)}
-                  alt={activeImage.name}
-                  draggable={false}
-                  style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel})` }}
-                  onLoad={() => setImageReady(true)}
-                  onError={() => setImageReady(true)}
-                />
-                {activeImageMarked && isFullscreen && <div className="marked-badge-fullscreen" aria-label="Marked image" />}
-                {activeImageMarked && !isFullscreen && <div className="marked-badge">Marked</div>}
-                {!isFullscreen && (
+                {!imageReady && !isSlideshowActive && <div className="spinner">Loading image...</div>}
+                {isSlideshowActive && slideshowTransition && slideshowTransition.toPath === activeImage.path ? (
+                  <>
+                    <img
+                      className={`transition-image from ${slideshowSettings.transitionType} ${slideshowTransition.phase}`}
+                      src={toFileUrl(slideshowTransition.fromPath)}
+                      alt="Previous slide"
+                      draggable={false}
+                      style={transitionImageStyle}
+                    />
+                    <img
+                      className={`transition-image to ${slideshowSettings.transitionType} ${slideshowTransition.phase}`}
+                      src={toFileUrl(slideshowTransition.toPath)}
+                      alt={activeImage.name}
+                      draggable={false}
+                      style={transitionImageStyle}
+                    />
+                  </>
+                ) : (
+                  <img
+                    key={activeImage.path}
+                    className={`active-image ${imageReady ? 'visible' : ''}`}
+                    src={toFileUrl(activeImage.path)}
+                    alt={activeImage.name}
+                    draggable={false}
+                    style={activeImageStyle}
+                    onLoad={markImageReady}
+                    onError={markImageReady}
+                  />
+                )}
+                {activeImageMarked && isPresentationMode && <div className="marked-badge-fullscreen" aria-label="Marked image" />}
+                {activeImageMarked && !isPresentationMode && <div className="marked-badge">Marked</div>}
+                {!isPresentationMode && (
                   <div className="image-caption">
                     {activeImage.name} ({activeIndex + 1}/{images.length})
                   </div>
                 )}
               </div>
 
-              {isFullscreen ? (
+              {isPresentationMode ? (
                 <button className="fullscreen-nav-zone right" onClick={() => moveImage(1)} disabled={activeIndex >= images.length - 1}>
                   <span className="fullscreen-nav-icon">
                     <ChevronRight size={66} strokeWidth={1.8} />
@@ -859,7 +1279,7 @@ function App() {
           )}
         </section>
 
-        {!isFullscreen && (
+        {!isPresentationMode && (
           <footer className="thumb-strip" ref={thumbStripRef}>
             {images.map((image, index) => (
               <button
@@ -878,7 +1298,7 @@ function App() {
           </footer>
         )}
 
-        {!isFullscreen && markedCount > 0 && (
+        {!isPresentationMode && markedCount > 0 && (
           <div className="marked-actions-anchor">
             <button className="marked-fab" onClick={() => setIsActionTrayOpen((prev) => !prev)}>
               Actions ({markedCount})
@@ -900,7 +1320,7 @@ function App() {
           </div>
         )}
 
-        {isFullscreen && isExifPanelOpen && (
+        {isPresentationMode && isExifPanelOpen && (
           <aside className="fullscreen-exif-overlay">
             <div className="right-panel-title">EXIF Data</div>
             {!activeImage && <div className="right-panel-empty">No active image.</div>}
@@ -918,11 +1338,18 @@ function App() {
                 ))}
               </div>
             )}
+            {isSlideshowActive && <div className="slideshow-overlay-badge">Slideshow</div>}
           </aside>
+        )}
+
+        {isSlideshowActive && (
+          <button className={`slideshow-stop-overlay ${showSlideshowStopButton ? 'visible' : ''}`} onClick={() => void stopSlideshow()}>
+            Stop Slideshow (S)
+          </button>
         )}
       </main>
 
-      {!isFullscreen && (
+      {!isPresentationMode && (
         <div className="side-tab-rail right">
           <button
             className={`side-tab-button right ${isExifPanelOpen ? 'open' : 'collapsed'}`}
@@ -934,7 +1361,7 @@ function App() {
         </div>
       )}
 
-      {!isFullscreen && isExifPanelOpen && (
+      {!isPresentationMode && isExifPanelOpen && (
         <aside className="right-panel">
           <div className="right-panel-title">EXIF Data</div>
           {!activeImage && <div className="right-panel-empty">No active image.</div>}
