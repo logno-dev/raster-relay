@@ -1,5 +1,5 @@
 {
-  "name": "Raster Relay",
+  "name": "Raster-Relay",
   "version": "0.1.3",
   "description": "Electron image gallery viewer for local files",
   "main": "out/main/index.js",

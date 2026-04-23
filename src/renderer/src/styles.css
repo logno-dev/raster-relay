@@ -332,6 +332,59 @@ button {
   overflow: hidden;
 }
 
+.fullscreen-exif-overlay {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: min(260px, 30vw);
+  max-height: min(52vh, calc(100% - 32px));
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(12, 16, 24, 0.52);
+  backdrop-filter: blur(8px);
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  z-index: 9;
+}
+
+.fullscreen-exif-overlay .right-panel-title {
+  margin-bottom: 8px;
+  font-size: 0.86rem;
+}
+
+.fullscreen-exif-overlay .metadata-list {
+  gap: 3px;
+  overflow: hidden;
+}
+
+.fullscreen-exif-overlay .metadata-row {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.fullscreen-exif-overlay .metadata-label {
+  font-size: 0.68rem;
+  margin-bottom: 0;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.fullscreen-exif-overlay .metadata-value {
+  font-size: 0.82rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .right-panel-title {
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -703,6 +756,13 @@ button {
     border-left: none;
     border-top: 1px solid var(--panel-border);
     max-height: 34vh;
+  }
+
+  .fullscreen-exif-overlay {
+    width: min(260px, calc(100vw - 24px));
+    max-height: min(50vh, calc(100% - 20px));
+    top: 10px;
+    right: 10px;
   }
 
   .main-stage {

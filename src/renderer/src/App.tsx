@@ -74,6 +74,27 @@ function App() {
   const markedCount = markedImagePaths.length
   const activeImageMarked = activeImage ? markedPathSet.has(activeImage.path) : false
   const isZoomed = zoomLevel > 1.001
+  const fullscreenMetadataEntries = useMemo(() => {
+    if (!activeMetadata) {
+      return []
+    }
+
+    const priority = new Set([
+      'File Name',
+      'Camera',
+      'Lens',
+      'Shot Time',
+      'Exposure',
+      'Aperture',
+      'ISO',
+      'Focal Length',
+      'Width',
+      'Height'
+    ])
+
+    const prioritized = activeMetadata.entries.filter((entry) => priority.has(entry.label))
+    return prioritized.slice(0, 10)
+  }, [activeMetadata])
 
   const currentPathLabel = useMemo(() => {
     if (!activeListing) {
@@ -767,9 +788,6 @@ function App() {
               <button className="ghost-button" onClick={toggleMarkOnActiveImage} disabled={!activeImage}>
                 {activeImageMarked ? 'Unmark (M)' : 'Mark (M)'}
               </button>
-              <button className="ghost-button" onClick={() => setIsExifPanelOpen((prev) => !prev)}>
-                {isExifPanelOpen ? 'Hide EXIF (E)' : 'Show EXIF (E)'}
-              </button>
               <button className="ghost-button" onClick={() => void toggleFullscreen()}>
                 {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
               </button>
@@ -880,6 +898,27 @@ function App() {
               </div>
             )}
           </div>
+        )}
+
+        {isFullscreen && isExifPanelOpen && (
+          <aside className="fullscreen-exif-overlay">
+            <div className="right-panel-title">EXIF Data</div>
+            {!activeImage && <div className="right-panel-empty">No active image.</div>}
+            {activeImage && metadataLoading && <div className="right-panel-empty">Loading metadata...</div>}
+            {activeImage && !metadataLoading && fullscreenMetadataEntries.length === 0 && (
+              <div className="right-panel-empty">No EXIF metadata available for this image.</div>
+            )}
+            {fullscreenMetadataEntries.length > 0 && (
+              <div className="metadata-list">
+                {fullscreenMetadataEntries.map((entry) => (
+                  <div key={entry.label} className="metadata-row">
+                    <div className="metadata-label">{entry.label}</div>
+                    <div className="metadata-value" title={entry.value}>{entry.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
         )}
       </main>
 
