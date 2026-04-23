@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { ChevronLeft, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import type { DirectoryEntry, DirectoryListing, ImageMetadata } from '../../shared/contracts'
@@ -57,9 +58,14 @@ function App() {
   const [isActionTrayOpen, setIsActionTrayOpen] = useState(false)
   const [isCopyingMarked, setIsCopyingMarked] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [zoomLevel, setZoomLevel] = useState(1)
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
+  const [isPanningImage, setIsPanningImage] = useState(false)
   const preloadCache = useRef<Set<string>>(new Set())
   const metadataCache = useRef<Map<string, ImageMetadata>>(new Map())
   const thumbStripRef = useRef<HTMLElement | null>(null)
+  const imageWrapRef = useRef<HTMLDivElement | null>(null)
+  const lastPointerRef = useRef<{ x: number; y: number; id: number } | null>(null)
 
   const images = activeListing?.images ?? []
   const hasImages = images.length > 0
@@ -67,6 +73,7 @@ function App() {
   const markedPathSet = useMemo(() => new Set(markedImagePaths), [markedImagePaths])
   const markedCount = markedImagePaths.length
   const activeImageMarked = activeImage ? markedPathSet.has(activeImage.path) : false
+  const isZoomed = zoomLevel > 1.001
 
   const currentPathLabel = useMemo(() => {
     if (!activeListing) {
@@ -143,6 +150,13 @@ function App() {
     const activePaths = new Set(images.map((image) => image.path))
     setMarkedImagePaths((prev) => prev.filter((path) => activePaths.has(path)))
   }, [images])
+
+  useEffect(() => {
+    setZoomLevel(1)
+    setPanOffset({ x: 0, y: 0 })
+    setIsPanningImage(false)
+    lastPointerRef.current = null
+  }, [activeImage?.path])
 
   useEffect(() => {
     void (async () => {
@@ -330,6 +344,12 @@ function App() {
       if (key === 'm') {
         event.preventDefault()
         toggleMarkOnActiveImage()
+        return
+      }
+
+      if (key === '0') {
+        event.preventDefault()
+        resetZoomPan()
       }
     }
 
@@ -531,6 +551,113 @@ function App() {
     setImageReady(false)
   }
 
+  function resetZoomPan(): void {
+    setZoomLevel(1)
+    setPanOffset({ x: 0, y: 0 })
+    setIsPanningImage(false)
+    lastPointerRef.current = null
+  }
+
+  function handleImageWheel(event: ReactWheelEvent<HTMLDivElement>): void {
+    if (!activeImage) {
+      return
+    }
+
+    event.preventDefault()
+
+    const wrap = imageWrapRef.current
+    if (!wrap) {
+      return
+    }
+
+    const rect = wrap.getBoundingClientRect()
+    const cursorX = event.clientX - rect.left - rect.width / 2
+    const cursorY = event.clientY - rect.top - rect.height / 2
+    const delta = -event.deltaY * 0.0015
+
+    setZoomLevel((previousZoom) => {
+      const nextZoom = Math.max(1, Math.min(6, previousZoom * (1 + delta)))
+
+      setPanOffset((previousPan) => {
+        if (nextZoom <= 1.001) {
+          return { x: 0, y: 0 }
+        }
+        return {
+          x: previousPan.x + cursorX * (1 / nextZoom - 1 / previousZoom),
+          y: previousPan.y + cursorY * (1 / nextZoom - 1 / previousZoom)
+        }
+      })
+
+      return nextZoom
+    })
+  }
+
+  function handleImagePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!isZoomed || event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    setIsPanningImage(true)
+    lastPointerRef.current = { x: event.clientX, y: event.clientY, id: event.pointerId }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handleImagePointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!isPanningImage || !lastPointerRef.current || event.pointerId !== lastPointerRef.current.id) {
+      return
+    }
+
+    const deltaX = event.clientX - lastPointerRef.current.x
+    const deltaY = event.clientY - lastPointerRef.current.y
+    lastPointerRef.current = { x: event.clientX, y: event.clientY, id: event.pointerId }
+
+    setPanOffset((previousPan) => ({
+      x: previousPan.x + deltaX / zoomLevel,
+      y: previousPan.y + deltaY / zoomLevel
+    }))
+  }
+
+  function handleImagePointerEnd(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (lastPointerRef.current?.id !== event.pointerId) {
+      return
+    }
+
+    setIsPanningImage(false)
+    lastPointerRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  function handleImageDoubleClick(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    if (zoomLevel > 1.001) {
+      resetZoomPan()
+      return
+    }
+
+    const wrap = imageWrapRef.current
+    if (!wrap) {
+      setZoomLevel(2)
+      setPanOffset({ x: 0, y: 0 })
+      return
+    }
+
+    const rect = wrap.getBoundingClientRect()
+    const cursorX = event.clientX - rect.left - rect.width / 2
+    const cursorY = event.clientY - rect.top - rect.height / 2
+    const nextZoom = 2
+
+    setZoomLevel((previousZoom) => {
+      setPanOffset((previousPan) => ({
+        x: previousPan.x + cursorX * (1 / nextZoom - 1 / previousZoom),
+        y: previousPan.y + cursorY * (1 / nextZoom - 1 / previousZoom)
+      }))
+      return nextZoom
+    })
+  }
+
   async function toggleFullscreen(): Promise<void> {
     if (document.fullscreenElement) {
       await document.exitFullscreen()
@@ -670,12 +797,23 @@ function App() {
                 </button>
               )}
 
-              <div className="image-wrap">
+              <div
+                ref={imageWrapRef}
+                className={`image-wrap ${isZoomed ? 'zoomed' : ''} ${isPanningImage ? 'panning' : ''}`}
+                onWheel={handleImageWheel}
+                onPointerDown={handleImagePointerDown}
+                onPointerMove={handleImagePointerMove}
+                onPointerUp={handleImagePointerEnd}
+                onPointerCancel={handleImagePointerEnd}
+                onDoubleClick={handleImageDoubleClick}
+              >
                 {!imageReady && <div className="spinner">Loading image...</div>}
                 <img
                   className={`active-image ${imageReady ? 'visible' : ''}`}
                   src={toFileUrl(activeImage.path)}
                   alt={activeImage.name}
+                  draggable={false}
+                  style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel})` }}
                   onLoad={() => setImageReady(true)}
                   onError={() => setImageReady(true)}
                 />

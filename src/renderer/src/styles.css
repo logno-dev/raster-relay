@@ -456,6 +456,15 @@ button {
   justify-content: center;
   position: relative;
   overflow: hidden;
+  touch-action: none;
+}
+
+.image-wrap.zoomed {
+  cursor: grab;
+}
+
+.image-wrap.zoomed.panning {
+  cursor: grabbing;
 }
 
 .active-image {
@@ -466,6 +475,8 @@ button {
   object-fit: contain;
   opacity: 0;
   transition: opacity 220ms ease;
+  transform-origin: center center;
+  user-select: none;
 }
 
 .active-image.visible {
