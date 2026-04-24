@@ -25,7 +25,14 @@ type NodeState = {
   children: DirectoryEntry[]
 }
 
+const EMPTY_IMAGES: ReadonlyArray<DirectoryListing['images'][number]> = []
+
 function toFileUrl(filePath: string): string {
+  if (window.location.protocol === 'file:') {
+    const normalizedPath = filePath.replace(/\\/g, '/')
+    return encodeURI(`file://${normalizedPath.startsWith('/') ? '' : '/'}${normalizedPath}`)
+  }
+
   return `gallery-image://image?path=${encodeURIComponent(filePath)}`
 }
 
@@ -118,7 +125,7 @@ function App() {
   const slideshowTransitionTimerRef = useRef<number | null>(null)
   const slideshowTransitionFrameRef = useRef<number | null>(null)
 
-  const images = activeListing?.images ?? []
+  const images = activeListing?.images ?? EMPTY_IMAGES
   const hasImages = images.length > 0
   const activeImage = hasImages ? images[activeIndex] : null
   const markedPathSet = useMemo(() => new Set(markedImagePaths), [markedImagePaths])
@@ -265,7 +272,13 @@ function App() {
 
   useEffect(() => {
     const activePaths = new Set(images.map((image) => image.path))
-    setMarkedImagePaths((prev) => prev.filter((path) => activePaths.has(path)))
+    setMarkedImagePaths((prev) => {
+      const next = prev.filter((path) => activePaths.has(path))
+      if (next.length === prev.length && next.every((value, index) => value === prev[index])) {
+        return prev
+      }
+      return next
+    })
   }, [images])
 
   useEffect(() => {
@@ -1228,7 +1241,7 @@ function App() {
                 {!imageReady && !isSlideshowActive && <div className="spinner">Loading image...</div>}
                 {isSlideshowActive && slideshowTransition && slideshowTransition.toPath === activeImage.path ? (
                   <>
-                    <img
+                <img
                       className={`transition-image from ${slideshowSettings.transitionType} ${slideshowTransition.phase}`}
                       src={toFileUrl(slideshowTransition.fromPath)}
                       alt="Previous slide"
@@ -1249,11 +1262,12 @@ function App() {
                     className={`active-image ${imageReady ? 'visible' : ''}`}
                     src={toFileUrl(activeImage.path)}
                     alt={activeImage.name}
-                    draggable={false}
-                    style={activeImageStyle}
-                    onLoad={markImageReady}
-                    onError={markImageReady}
-                  />
+                  draggable={false}
+                  decoding="async"
+                  style={activeImageStyle}
+                  onLoad={markImageReady}
+                  onError={markImageReady}
+                />
                 )}
                 {activeImageMarked && isPresentationMode && <div className="marked-badge-fullscreen" aria-label="Marked image" />}
                 {activeImageMarked && !isPresentationMode && <div className="marked-badge">Marked</div>}
@@ -1292,7 +1306,7 @@ function App() {
                 }}
                 title={image.name}
               >
-                <img src={toFileUrl(image.path)} alt={image.name} loading="lazy" />
+                <img src={toFileUrl(image.path)} alt={image.name} loading="lazy" decoding="async" />
               </button>
             ))}
           </footer>
