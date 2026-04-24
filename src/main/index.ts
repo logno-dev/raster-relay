@@ -50,6 +50,7 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 640,
     title: 'Raster Relay',
+    titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
