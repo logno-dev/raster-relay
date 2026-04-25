@@ -619,6 +619,12 @@ function App() {
         return
       }
 
+      if (key === 'r') {
+        event.preventDefault()
+        void refreshCurrentDirectory()
+        return
+      }
+
       if (key === '0') {
         event.preventDefault()
         resetZoomPan()
@@ -649,11 +655,42 @@ function App() {
     }
   }, [images.length, activeImage?.path, isSlideshowActive, slideshowSettings])
 
-  async function loadDirectory(targetPath: string): Promise<void> {
+  useEffect(() => {
+    function onWindowFocus(): void {
+      const targetPath = selectedDirectory ?? activeRootPath
+      if (!targetPath) {
+        return
+      }
+
+      void loadDirectory(targetPath, { preserveSelection: true })
+    }
+
+    window.addEventListener('focus', onWindowFocus)
+    return () => {
+      window.removeEventListener('focus', onWindowFocus)
+    }
+  }, [selectedDirectory, activeRootPath, activeImage?.path, activeIndex])
+
+  async function loadDirectory(targetPath: string, options?: { preserveSelection?: boolean }): Promise<void> {
+    const previousActivePath = options?.preserveSelection ? activeImage?.path ?? null : null
     const listing = await window.galleryApi.listDirectory(targetPath)
+
+    let nextActiveIndex = 0
+    if (options?.preserveSelection && listing.images.length > 0) {
+      const matchedIndex = previousActivePath
+        ? listing.images.findIndex((image) => image.path === previousActivePath)
+        : -1
+
+      if (matchedIndex >= 0) {
+        nextActiveIndex = matchedIndex
+      } else {
+        nextActiveIndex = Math.min(activeIndex, listing.images.length - 1)
+      }
+    }
+
     setActiveListing(listing)
     setSelectedDirectory(targetPath)
-    setActiveIndex(0)
+    setActiveIndex(nextActiveIndex)
     setImageReady(false)
 
     setNodes((prev) => ({
@@ -663,6 +700,15 @@ function App() {
         children: listing.directories
       }
     }))
+  }
+
+  async function refreshCurrentDirectory(): Promise<void> {
+    const targetPath = selectedDirectory ?? activeRootPath
+    if (!targetPath) {
+      return
+    }
+
+    await loadDirectory(targetPath, { preserveSelection: true })
   }
 
   async function selectRoot(path: string): Promise<void> {
@@ -1114,6 +1160,9 @@ function App() {
               {currentPathLabel}
             </div>
             <div className="toolbar-actions">
+              <button className="ghost-button" onClick={() => void refreshCurrentDirectory()}>
+                Refresh (R)
+              </button>
               <button className="ghost-button" onClick={toggleMarkOnActiveImage} disabled={!activeImage}>
                 {activeImageMarked ? 'Unmark (M)' : 'Mark (M)'}
               </button>
