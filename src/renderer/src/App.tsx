@@ -41,6 +41,37 @@ function getFolderName(targetPath: string): string {
   return parts[parts.length - 1] ?? targetPath
 }
 
+function getAncestorPathsWithinRoot(targetPath: string, rootPath: string): string[] {
+  const normalizedRoot = rootPath.replace(/[\\/]+$/, '')
+  const normalizedTarget = targetPath.replace(/[\\/]+$/, '')
+
+  if (!normalizedRoot || !normalizedTarget || normalizedRoot === normalizedTarget) {
+    return []
+  }
+
+  const separator = normalizedRoot.includes('\\') && !normalizedRoot.includes('/') ? '\\' : '/'
+  const prefix = `${normalizedRoot}${separator}`
+
+  if (!normalizedTarget.startsWith(prefix)) {
+    return []
+  }
+
+  const relativeParts = normalizedTarget.slice(prefix.length).split(/[\\/]/).filter(Boolean)
+  if (relativeParts.length <= 1) {
+    return []
+  }
+
+  const ancestors: string[] = []
+  let currentPath = normalizedRoot
+
+  for (let index = 0; index < relativeParts.length - 1; index += 1) {
+    currentPath = `${currentPath}${separator}${relativeParts[index]}`
+    ancestors.push(currentPath)
+  }
+
+  return ancestors
+}
+
 function parseSavedRoots(rawValue: string | null): string[] {
   if (!rawValue) {
     return []
@@ -589,15 +620,19 @@ function App() {
 
       if (event.key === 'Home' && images.length > 0) {
         event.preventDefault()
-        setActiveIndex(0)
-        setImageReady(false)
+        if (activeIndex !== 0) {
+          setActiveIndex(0)
+          setImageReady(false)
+        }
         return
       }
 
       if (event.key === 'End' && images.length > 0) {
         event.preventDefault()
-        setActiveIndex(images.length - 1)
-        setImageReady(false)
+        if (activeIndex !== images.length - 1) {
+          setActiveIndex(images.length - 1)
+          setImageReady(false)
+        }
         return
       }
 
@@ -674,6 +709,33 @@ function App() {
   async function loadDirectory(targetPath: string, options?: { preserveSelection?: boolean }): Promise<void> {
     const previousActivePath = options?.preserveSelection ? activeImage?.path ?? null : null
     const listing = await window.galleryApi.listDirectory(targetPath)
+    const nodeUpdates: Record<string, NodeState> = {
+      [targetPath]: {
+        loading: false,
+        children: listing.directories
+      }
+    }
+
+    if (activeRootPath) {
+      const ancestorPaths = getAncestorPathsWithinRoot(targetPath, activeRootPath)
+      const refreshPaths = [activeRootPath, ...ancestorPaths].filter(
+        (path) => path !== targetPath && Boolean(expandedPaths[path])
+      )
+
+      await Promise.all(
+        refreshPaths.map(async (path) => {
+          try {
+            const parentListing = await window.galleryApi.listDirectory(path)
+            nodeUpdates[path] = {
+              loading: false,
+              children: parentListing.directories
+            }
+          } catch {
+            // ignore parent refresh failures and preserve existing node state
+          }
+        })
+      )
+    }
 
     let nextActiveIndex = 0
     if (options?.preserveSelection && listing.images.length > 0) {
@@ -693,13 +755,7 @@ function App() {
     setActiveIndex(nextActiveIndex)
     setImageReady(false)
 
-    setNodes((prev) => ({
-      ...prev,
-      [targetPath]: {
-        loading: false,
-        children: listing.directories
-      }
-    }))
+    setNodes((prev) => ({ ...prev, ...nodeUpdates }))
   }
 
   async function refreshCurrentDirectory(): Promise<void> {
@@ -877,14 +933,20 @@ function App() {
     if (!hasImages) {
       return
     }
+
+    let changed = false
     setActiveIndex((prev) => {
       const next = prev + step
       if (next < 0 || next >= images.length) {
         return prev
       }
+      changed = true
       return next
     })
-    setImageReady(false)
+
+    if (changed) {
+      setImageReady(false)
+    }
   }
 
   async function startSlideshow(): Promise<void> {
@@ -1350,8 +1412,10 @@ function App() {
                 data-thumb-index={index}
                 className={`thumb-button ${index === activeIndex ? 'active' : ''} ${markedPathSet.has(image.path) ? 'marked' : ''}`}
                 onClick={() => {
-                  setActiveIndex(index)
-                  setImageReady(false)
+                  if (index !== activeIndex) {
+                    setActiveIndex(index)
+                    setImageReady(false)
+                  }
                 }}
                 title={image.name}
               >

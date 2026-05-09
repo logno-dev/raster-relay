@@ -67,6 +67,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -193,6 +195,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 0 0 auto;
+  max-height: min(32vh, 280px);
+  overflow-y: auto;
 }
 
 .section-title {
@@ -236,6 +241,8 @@ button {
 }
 
 .tree-wrapper {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid #3b3b3b;
   border-radius: 10px;
